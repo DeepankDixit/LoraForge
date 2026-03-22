@@ -131,7 +131,8 @@ datasets:
     hf_dataset_id: "AlicanKiraz0/All-CVE-Records-Training-Dataset"
     split: "train"
     # This dataset has HuggingFace chat format (list of message dicts)
-    messages_column: "conversations"
+    instruction_column: "User"
+    response_column: "Assistant"
     # Sample this many examples from the full dataset (None = use all)
     sample_n: 30000
     # Random seed for reproducible sampling

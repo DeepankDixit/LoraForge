@@ -117,8 +117,8 @@ datasets:
     split: "train"
     # Column names in the HuggingFace dataset
     # Run: dataset.features to see all available columns
-    instruction_column: "instruction"
-    response_column: "output"
+    instruction_column: "user"
+    response_column: "assistant"
     system_prompt: >
       You are an expert cybersecurity analyst with deep knowledge of
       vulnerabilities, threat intelligence, MITRE ATT&CK techniques, network

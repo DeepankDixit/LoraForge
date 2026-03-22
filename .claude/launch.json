@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "loraforge-api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["activity1_baseline/main.py", "--config", "activity1_baseline/config.yaml"],
+      "port": 8000
+    },
+    {
+      "name": "benchmark-dashboard",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "activity5_benchmark_dashboard/reporting/dashboard/app.py", "--server.port", "8501"],
+      "port": 8501
+    }
+  ]
+}

@@ -1,0 +1,251 @@
+# =============================================================================
+# Activity 0: QLoRA Supervised Fine-Tuning Configuration
+# =============================================================================
+# This file controls everything about the SFT run. No hardcoded values in code.
+# All hyperparameters, paths, and dataset settings live here.
+#
+# The training code reads this config via OmegaConf and passes values to
+# HuggingFace Trainer, PEFT LoraConfig, and BitsAndBytesConfig.
+#
+# To run: python -m activity0_sft.training.qlora_trainer --config activity0_sft/config.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Base model — what we are fine-tuning on top of
+# -----------------------------------------------------------------------------
+model:
+  # The exact model card on HuggingFace Hub.
+  # CRITICAL: This must match the base_model_name_or_path in adapter_config.json
+  # when we load the adapter in Activity 1.
+  base_model_id: "meta-llama/Llama-3.1-8B-Instruct"
+
+  # Maximum sequence length in tokens.
+  # Llama-3.1 supports up to 128K context, but for training we cap at 2048
+  # because longer sequences use more VRAM and most instruction pairs are shorter.
+  # Trendyol dataset average: ~400 tokens/example. P99: ~1200 tokens.
+  max_seq_length: 2048
+
+  # Use Flash Attention 2 if available — it's 2-3x faster and uses less VRAM
+  # by computing attention in chunks rather than materializing the full O(n²) matrix.
+  # Requires: pip install flash-attn --no-build-isolation
+  use_flash_attention: true
+
+  # HuggingFace token — Llama-3.1 is a gated model (requires Meta license agreement).
+  # Set via environment variable HF_TOKEN, not hardcoded here.
+  # Get your token at: https://huggingface.co/settings/tokens
+  hf_token_env_var: "HF_TOKEN"
+
+
+# -----------------------------------------------------------------------------
+# QLoRA quantization settings (BitsAndBytesConfig)
+# -----------------------------------------------------------------------------
+# These settings control how the frozen base model is loaded into memory.
+# We use 4-bit NF4 quantization to fit the 16GB model into ~4GB VRAM.
+# The LoRA adapter matrices themselves are NOT quantized — they stay in BF16.
+quantization:
+  # Load the base model in 4-bit format
+  load_in_4bit: true
+
+  # NF4 (NormalFloat4): 4-bit quantization designed for normally-distributed weights.
+  # Better than INT4 for neural networks because it places quantization bins
+  # at the quantiles of a standard normal distribution.
+  # Other options: "fp4" (standard 4-bit float), "nf4" (recommended)
+  bnb_4bit_quant_type: "nf4"
+
+  # The data type used for the compute during the dequantization step.
+  # BF16 is preferred on A10G/A100/H100 (native BF16 hardware support).
+  # On older GPUs without BF16: use "float16"
+  bnb_4bit_compute_dtype: "bfloat16"
+
+  # Double quantization: quantize the quantization constants themselves.
+  # Saves ~0.5 GB additional VRAM with minimal quality loss.
+  bnb_4bit_use_double_quant: true
+
+
+# -----------------------------------------------------------------------------
+# LoRA adapter configuration (PEFT LoraConfig)
+# -----------------------------------------------------------------------------
+# These settings define the A and B matrices that we actually train.
+# They directly control the adapter_config.json that gets saved.
+lora:
+  # Rank of the LoRA matrices.
+  # r=16: good default for instruction following tasks.
+  # Higher rank (32, 64) = more parameters = more capacity but more VRAM.
+  # Lower rank (4, 8) = smaller adapter = faster but less learning capacity.
+  r: 16
+
+  # LoRA scaling factor.
+  # Effective weight update = (alpha / r) × (B × A)
+  # alpha=32, r=16 → scaling = 2.0
+  # Convention: alpha = 2 × r is a common choice ("double the rank").
+  lora_alpha: 32
+
+  # Dropout on LoRA matrices — acts as regularization to prevent overfitting.
+  # 0.05 (5%) is a conservative default. Increase to 0.1 if overfitting.
+  lora_dropout: 0.05
+
+  # Which weight matrices in the transformer to attach LoRA adapters to.
+  # For Llama-3.x, these are the standard module names.
+  # "all-linear" is a shorthand that targets ALL linear layers — alternatively
+  # list them explicitly for fine-grained control.
+  target_modules:
+    - "q_proj"     # Query projection in self-attention
+    - "k_proj"     # Key projection in self-attention
+    - "v_proj"     # Value projection in self-attention
+    - "o_proj"     # Output projection after attention
+    - "gate_proj"  # Gate in SwiGLU MLP block
+    - "up_proj"    # Up projection in SwiGLU MLP block
+    - "down_proj"  # Down projection in SwiGLU MLP block
+
+  # Task type — CAUSAL_LM for decoder-only models (GPT, Llama, Mistral, etc.)
+  # This tells PEFT how to handle the forward pass.
+  task_type: "CAUSAL_LM"
+
+  # Whether to initialize B to zeros (so B×A = 0 at training start).
+  # True = start from base model behavior, add delta incrementally. ALWAYS use True.
+  init_lora_weights: true
+
+
+# -----------------------------------------------------------------------------
+# Dataset configuration
+# -----------------------------------------------------------------------------
+datasets:
+  # Primary dataset: high-quality cybersecurity instruction-response pairs
+  # 53,000 examples across 200+ security domains (malware, network, cloud, etc.)
+  primary:
+    hf_dataset_id: "Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset"
+    split: "train"
+    # Column names in the HuggingFace dataset
+    # Run: dataset.features to see all available columns
+    instruction_column: "instruction"
+    response_column: "output"
+    system_prompt: >
+      You are an expert cybersecurity analyst with deep knowledge of
+      vulnerabilities, threat intelligence, MITRE ATT&CK techniques, network
+      security, and incident response. Provide accurate, detailed, and
+      actionable security analysis.
+
+  # Secondary dataset: CVE records in chat format
+  # 300K examples — we sample 30K to avoid imbalance vs primary dataset
+  secondary:
+    hf_dataset_id: "AlicanKiraz0/All-CVE-Records-Training-Dataset"
+    split: "train"
+    # This dataset has HuggingFace chat format (list of message dicts)
+    messages_column: "conversations"
+    # Sample this many examples from the full dataset (None = use all)
+    sample_n: 30000
+    # Random seed for reproducible sampling
+    sample_seed: 42
+
+  # Train/validation split ratio
+  # 5% held out for evaluation — enough for perplexity measurement
+  validation_split: 0.05
+
+  # Cache processed datasets to disk to avoid reprocessing on restart
+  cache_dir: "/tmp/loraforge_dataset_cache"
+
+
+# -----------------------------------------------------------------------------
+# Training hyperparameters (HuggingFace TrainingArguments)
+# -----------------------------------------------------------------------------
+training:
+  output_dir: "./outputs/activity0_sft"
+
+  # Number of passes over the entire dataset.
+  # 3 epochs is a good starting point for 83K examples.
+  # Watch the eval loss — if it starts increasing, stop early.
+  num_train_epochs: 3
+
+  # Effective batch size = per_device_train_batch_size × gradient_accumulation_steps
+  # Effective batch size = 4 × 8 = 32 (matches typical SFT setups)
+  # Why not just set batch_size=32? Because that requires 32× the activation VRAM.
+  # Gradient accumulation runs the forward pass in small batches and accumulates
+  # gradients before each optimizer step — same math, less memory.
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 8
+
+  # Save and evaluate every N steps
+  # With 83K examples, batch=4, accum=8: ~2,600 optimizer steps per epoch
+  # Saving every 500 steps gives ~5 checkpoints per epoch
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 10
+
+  # Learning rate for the LoRA parameters.
+  # 2e-4 is standard for SFT with LoRA.
+  # The base model weights are frozen — they have no learning rate.
+  learning_rate: 2.0e-4
+
+  # AdamW optimizer — Adam with weight decay.
+  # For QLoRA, use the paged version (bnb) to handle memory pressure gracefully.
+  # "paged_adamw_8bit" further reduces optimizer state memory.
+  optim: "paged_adamw_8bit"
+
+  # Weight decay — L2 regularization on the LoRA parameters.
+  weight_decay: 0.001
+
+  # Learning rate warmup: linearly increase lr from 0 to learning_rate
+  # over the first 3% of training steps, then cosine decay.
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+
+  # BF16 training (requires Ampere or newer GPU: A10G, A100, H100, RTX 3090+)
+  # BF16 uses the same memory as FP16 but has better numerical stability
+  # (wider exponent range, less prone to gradient underflow).
+  bf16: true
+
+  # Gradient checkpointing: recompute activations during backward pass
+  # instead of storing them. Reduces VRAM by ~40% at the cost of ~30% more compute.
+  gradient_checkpointing: true
+
+  # Pack multiple short examples into a single sequence to reduce padding waste.
+  # Example: two 800-token examples → one 1600-token sequence (< max_seq_length=2048)
+  # This significantly increases GPU utilization.
+  packing: true
+
+  # How many checkpoints to keep. Each checkpoint is ~150MB (just the adapter).
+  # Keeping 3 lets you roll back if the latest checkpoint is worse.
+  save_total_limit: 3
+
+  # Load the best checkpoint (lowest eval loss) when training finishes.
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+  # Random seed for reproducibility
+  seed: 42
+
+  # Report training metrics to these destinations
+  # Options: "tensorboard", "wandb", "none"
+  report_to: "tensorboard"
+
+
+# -----------------------------------------------------------------------------
+# Output paths — where the trained adapter gets saved
+# -----------------------------------------------------------------------------
+output:
+  # The adapter directory (adapter_config.json + adapter_model.safetensors)
+  # This is what Activity 1 loads and merges.
+  adapter_dir: "./outputs/cybersec_analyst_lora"
+
+  # JSON file with training metrics: loss curve, eval perplexity, duration
+  metrics_file: "./outputs/activity0_training_metrics.json"
+
+  # TensorBoard logs for visualizing training curves
+  tensorboard_dir: "./outputs/tensorboard_logs"
+
+
+# -----------------------------------------------------------------------------
+# Evaluation configuration
+# -----------------------------------------------------------------------------
+evaluation:
+  # Compute perplexity on validation split at end of training
+  compute_perplexity: true
+
+  # Optional: run qualitative evaluation with a few hand-crafted prompts
+  # These let you sanity-check whether the model "learned" cybersecurity concepts
+  qualitative_prompts:
+    - "What is the MITRE ATT&CK technique T1059 and what are common mitigations?"
+    - "Explain what a buffer overflow vulnerability is and how an attacker exploits it."
+    - "A SIEM alert shows lateral movement from host 10.0.1.5 to 10.0.1.12. What are your immediate response steps?"
+    - "What is the difference between a CVE, a CWE, and a CVSS score?"

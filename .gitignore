@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────
+# LoraForge — .gitignore
+# ─────────────────────────────────────────────
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ─── Model outputs — NEVER commit these ───────
+# Adapters, merged models, quantized checkpoints
+# are large binary files. Push to HuggingFace Hub
+# or download directly from Lambda before terminating.
+outputs/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+*.ggml
+
+# HuggingFace cache
+.cache/
+huggingface/
+
+# Dataset cache
+/tmp/loraforge_dataset_cache/
+
+# TensorBoard logs
+runs/
+**/tensorboard_logs/
+
+# ─── Secrets — NEVER commit these ────────────
+.env
+.env.*
+secrets.yaml
+secrets.yml
+*_token*
+*_key*
+hf_token*
+
+# ─── OS / editor ─────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Jupyter ─────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── Coverage / testing artifacts ────────────
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

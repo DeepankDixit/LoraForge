@@ -1,0 +1,49 @@
+# LoraForge Base Configuration
+# All activity-specific configs inherit from and override these defaults.
+
+project:
+  name: "loraforge"
+  version: "0.1.0"
+  seed: 42
+
+model:
+  base_model_id: "meta-llama/Llama-3.1-8B-Instruct"
+  lora_adapter_id: null           # HuggingFace Hub ID or local path
+  dtype: "float16"                # float16, bfloat16, float32
+  max_model_len: 8192             # Maximum sequence length (prompt + output)
+  trust_remote_code: false
+
+serving:
+  host: "0.0.0.0"
+  port: 8000
+  gpu_memory_utilization: 0.85   # Fraction of GPU memory for vLLM
+  max_num_seqs: 256              # Max concurrent sequences
+  tensor_parallel_size: 1        # Number of GPUs for tensor parallelism
+  pipeline_parallel_size: 1      # Number of GPUs for pipeline parallelism
+  enable_prefix_caching: false   # Overridden in Activity 3
+  kv_cache_dtype: "auto"         # auto (fp16/bf16), fp8, int8
+  speculative_model: null        # Draft model path for speculative decoding
+
+benchmark:
+  batch_sizes: [1, 4, 8, 16]
+  num_requests_per_batch: 50
+  num_warmup_requests: 10        # Warmup requests before measurement
+  prompt_lengths: [128, 512, 1024, 2048]
+  output_length: 256
+  seed: 42
+
+evaluation:
+  perplexity_dataset: "wikitext"
+  perplexity_num_samples: 500
+  mmlu_subjects: "all"           # or list of subjects
+  mmlu_num_samples: 200
+
+logging:
+  level: "INFO"                  # DEBUG, INFO, WARNING, ERROR
+  log_dir: "./logs"
+  json_logging: true
+
+output:
+  results_base_dir: "./results"
+  checkpoints_dir: "./checkpoints"
+  save_merged_model: false

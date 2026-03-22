@@ -1,0 +1,131 @@
+# ============================================================================
+# Activity 1: Baseline Deployment Configuration
+# ============================================================================
+# This config drives merge.py, vllm_server.py, benchmark/client.py,
+# evaluation/perplexity.py, and reporting/report_generator.py.
+#
+# All paths are relative to the activity1_baseline/ directory unless noted.
+# Run from the repo root: python -m activity1_baseline.main
+# ============================================================================
+
+# ── Model Configuration ──────────────────────────────────────────────────────
+base_model_id: "meta-llama/Llama-3.1-8B-Instruct"
+  # The original base model on HuggingFace — same one used in Activity 0.
+  # Used in the merge step to reconstruct the full model.
+
+lora_adapter_path: "./outputs/cybersec_analyst_lora"
+  # Output from Activity 0. Contains adapter_config.json + adapter_model.safetensors.
+  # MUST exist before running Activity 1.
+
+merged_model_path: "./outputs/cybersec_analyst_merged"
+  # Where to save the merged FP16 model after peft.merge_and_unload().
+  # This directory becomes the --model argument to vLLM.
+  # Size: ~16GB (same as base model in FP16).
+
+# ── Merge Configuration ──────────────────────────────────────────────────────
+merge:
+  device: "cpu"
+    # Merge on CPU to avoid OOM — merging is just matrix addition, no forward
+    # pass needed. On CPU, 16GB of RAM is sufficient (most cloud instances have 64GB+).
+  torch_dtype: "float16"
+    # Save merged model in FP16. This is the unoptimized baseline precision.
+    # Activity 2 will re-quantize to FP8/INT4. We intentionally do NOT quantize here
+    # so we have a clean upper bound on model quality.
+  safe_serialization: true
+    # Save in .safetensors format (preferred over .bin for safety and loading speed).
+
+# ── vLLM Server Configuration ────────────────────────────────────────────────
+server:
+  host: "0.0.0.0"
+    # Listen on all interfaces. Change to "127.0.0.1" for local-only access.
+  port: 8000
+  dtype: "float16"
+    # Must match the precision the merged model was saved in.
+  max_model_len: 4096
+    # Maximum sequence length (prompt + completion). Llama-3.1 supports 128K,
+    # but 4096 is sufficient for our benchmark and keeps KV cache usage manageable.
+  gpu_memory_utilization: 0.90
+    # Fraction of GPU memory to allocate for model + KV cache.
+    # 0.90 on a 24GB A10G: 21.6GB total → ~16.8GB model → ~4.8GB for KV cache.
+    # Increase carefully — too high causes OOM during generation.
+  max_num_seqs: 64
+    # Maximum number of concurrent requests vLLM will serve simultaneously.
+    # Set higher than our max benchmark concurrency to avoid artificial throttling.
+  tensor_parallel_size: 1
+    # Number of GPUs to shard across. Activity 1 assumes a single A10G.
+    # For multi-GPU setups, increase this (requires NCCL).
+  startup_timeout_seconds: 120
+    # How long to wait for vLLM to start before declaring failure.
+
+# ── Benchmark Configuration ──────────────────────────────────────────────────
+benchmark:
+  concurrency_levels: [1, 4, 8, 16, 32]
+    # Number of simultaneous requests sent. Sweeping this shows the TTFT/throughput
+    # tradeoff curve. At concurrency=1, we see latency-optimal behavior.
+    # At concurrency=32, we see throughput-optimal behavior.
+
+  prompt_lengths_tokens: [128, 512, 2048]
+    # Number of tokens in the input prompt. Drives prefill cost → TTFT.
+    # 128 = short query, 512 = medium context, 2048 = long document.
+
+  output_lengths_tokens: [128, 256]
+    # Maximum tokens to generate. Drives decode phase length → throughput.
+
+  num_requests_per_config: 20
+    # How many requests to send for each (concurrency, prompt_len, output_len) combo.
+    # 20 gives enough samples for P50/P95 percentile computation.
+
+  warmup_requests: 5
+    # Requests sent before timing starts. Warms up CUDA graphs and PagedAttention
+    # page table allocations so first-request cold-start doesn't skew results.
+
+  request_timeout_seconds: 120
+    # Per-request timeout. Long enough for 2048-token generation.
+
+  temperature: 0.1
+    # Low temperature for reproducible outputs. Don't use 0.0 (greedy) —
+    # it bypasses sampling and can produce slightly different code paths.
+
+  api_base_url: "http://localhost:8000/v1"
+    # Where the benchmark client sends requests. Change if vLLM is on a remote server.
+
+# ── Evaluation Configuration ─────────────────────────────────────────────────
+evaluation:
+  test_dataset: "trendyol/trendyol-llm-v2.0-dpo-mix-v3.0"
+    # Same dataset used for training in Activity 0. We use the held-out 5% test split.
+  test_split_name: "test"
+    # HuggingFace dataset split name.
+  max_eval_samples: 500
+    # Number of test examples to evaluate perplexity on. 500 is enough for
+    # statistical confidence without running for hours.
+  batch_size: 4
+    # Batch size for perplexity computation (forward passes, no generation).
+  max_seq_length: 2048
+    # Truncate sequences longer than this for perplexity computation.
+
+  qualitative_prompts:
+    # 6 curated prompts used to manually inspect model quality.
+    # Same prompts used in Activity 0's eval.py for direct comparison.
+    - "Explain CVE-2021-44228 (Log4Shell): what is the vulnerability, what is the attack vector, and what systems were affected?"
+    - "What is the difference between MITRE ATT&CK techniques T1059 (Command and Scripting Interpreter) and T1078 (Valid Accounts)?"
+    - "A user reports that their credentials may have been compromised. Describe the first five steps of your incident response process."
+    - "What is the difference between a SIEM and a SOAR platform? When would you use each?"
+    - "Explain the TLS handshake at the packet level. What does the ClientHello message contain and why?"
+    - "What is lateral movement in the context of a network intrusion? Give three specific techniques an attacker might use."
+
+# ── Reporting Configuration ───────────────────────────────────────────────────
+reporting:
+  output_dir: "./results"
+    # Where benchmark results and reports are saved.
+  baseline_results_filename: "baseline_results.json"
+    # The canonical baseline file. All future activities compare against this.
+  report_filename: "baseline_report.md"
+    # Human-readable markdown report. Also rendered to HTML.
+  include_html: true
+    # Also generate an HTML version of the report (useful for GitHub Pages).
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+  log_file: "./results/activity1_baseline.log"

@@ -28,7 +28,7 @@ model:
   # Use Flash Attention 2 if available — it's 2-3x faster and uses less VRAM
   # by computing attention in chunks rather than materializing the full O(n²) matrix.
   # Requires: pip install flash-attn --no-build-isolation
-  use_flash_attention: true
+  use_flash_attention: false  # flash-attn requires source compilation; disabled for stability
 
   # HuggingFace token — Llama-3.1 is a gated model (requires Meta license agreement).
   # Set via environment variable HF_TOKEN, not hardcoded here.

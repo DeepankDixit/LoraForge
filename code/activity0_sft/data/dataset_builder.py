@@ -187,9 +187,11 @@ def load_trendyol_dataset(
 def load_cve_dataset(
     hf_dataset_id: str,
     split: str,
-    messages_column: str,
+    messages_column: Optional[str],
     sample_n: Optional[int],
     sample_seed: int,
+    instruction_column: Optional[str] = None,
+    response_column: Optional[str] = None,
     cache_dir: Optional[str] = None,
 ) -> Dataset:
     """
@@ -252,12 +254,41 @@ def load_cve_dataset(
         """
         Normalize CVE conversation format to standard ChatML messages.
 
-        We:
-        1. Add a cybersecurity system prompt if one isn't already present
-        2. Normalize role names (human → user, gpt → assistant)
-        3. Filter out malformed conversations
+        Supports two dataset layouts:
+        - Chat format: messages_column holds a list of message dicts
+          (e.g. [{"role": "user", "content": "..."}, ...])
+        - Plain format: instruction_column + response_column hold raw strings
+          (e.g. User/Assistant columns — messages_column must be None)
         """
         formatted_messages = []
+
+        # ── Plain instruction/response format ──────────────────────────────
+        if messages_column is None:
+            instr_list = examples[instruction_column]
+            resp_list  = examples[response_column]
+            # Try to pick up a system column if it exists (case-insensitive)
+            sys_key = next(
+                (k for k in examples if k.lower() == "system"), None
+            )
+            for i in range(len(instr_list)):
+                instruction = instr_list[i]
+                response    = resp_list[i]
+                if not instruction or not response:
+                    continue
+                if len(str(response).strip()) < MIN_RESPONSE_LENGTH:
+                    continue
+                sys_text = examples[sys_key][i] if sys_key else None
+                messages = [{
+                    "role": "system",
+                    "content": str(sys_text).strip() if sys_text and str(sys_text).strip()
+                               else DEFAULT_CYBERSEC_SYSTEM_PROMPT,
+                }]
+                messages.append({"role": "user",      "content": str(instruction).strip()})
+                messages.append({"role": "assistant", "content": str(response).strip()})
+                formatted_messages.append(messages)
+            return {"messages": formatted_messages}
+
+        # ── Chat / conversation-list format ────────────────────────────────
         for conversation in examples[messages_column]:
             try:
                 if not conversation or not isinstance(conversation, list):
@@ -446,7 +477,9 @@ def build_dataset(
     cve_ds = load_cve_dataset(
         hf_dataset_id=secondary_cfg.hf_dataset_id,
         split=secondary_cfg.split,
-        messages_column=secondary_cfg.messages_column,
+        messages_column=secondary_cfg.get("messages_column", None),
+        instruction_column=secondary_cfg.get("instruction_column", None),
+        response_column=secondary_cfg.get("response_column", None),
         sample_n=secondary_cfg.get("sample_n", None),
         sample_seed=secondary_cfg.get("sample_seed", 42),
         cache_dir=cache_dir,

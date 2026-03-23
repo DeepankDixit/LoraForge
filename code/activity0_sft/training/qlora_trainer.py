@@ -358,6 +358,13 @@ def attach_lora_adapters(
     # B with zeros (so the initial output is identical to the base model).
     model = get_peft_model(model, lora_config)
 
+    # With 4-bit quantization + gradient checkpointing, the input embeddings
+    # are frozen by default, which breaks the gradient graph (no grad_fn on
+    # the first tensor in the backward pass). enable_input_require_grads()
+    # registers a forward hook that forces requires_grad=True on all inputs,
+    # re-connecting the gradient path through the frozen base model layers.
+    model.enable_input_require_grads()
+
     # Print a summary of trainable vs total parameters.
     # Should show ~30M trainable / 8B total = ~0.4%
     model.print_trainable_parameters()

@@ -164,8 +164,8 @@ training:
   # Why not just set batch_size=32? Because that requires 32× the activation VRAM.
   # Gradient accumulation runs the forward pass in small batches and accumulates
   # gradients before each optimizer step — same math, less memory.
-  per_device_train_batch_size: 16  # increased from 4 — A100 has 42GB VRAM, only using 5.7GB
-  gradient_accumulation_steps: 2   # reduced from 8 — effective batch still 32 (16×2)
+  per_device_train_batch_size: 8   # batch=16 caused OOM; 8 uses ~18-20GB — safe headroom on A100
+  gradient_accumulation_steps: 4  # effective batch still 32 (8×4)
 
   # Save and evaluate every N steps
   # With 83K examples, batch=4, accum=8: ~2,600 optimizer steps per epoch

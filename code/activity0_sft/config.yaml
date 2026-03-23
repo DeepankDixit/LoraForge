@@ -23,7 +23,7 @@ model:
   # Llama-3.1 supports up to 128K context, but for training we cap at 2048
   # because longer sequences use more VRAM and most instruction pairs are shorter.
   # Trendyol dataset average: ~400 tokens/example. P99: ~1200 tokens.
-  max_seq_length: 2048
+  max_seq_length: 1024  # reduced from 2048 — cuts attention cost ~4x; P99 of dataset is ~1200 tokens
 
   # Use Flash Attention 2 if available — it's 2-3x faster and uses less VRAM
   # by computing attention in chunks rather than materializing the full O(n²) matrix.
@@ -164,8 +164,8 @@ training:
   # Why not just set batch_size=32? Because that requires 32× the activation VRAM.
   # Gradient accumulation runs the forward pass in small batches and accumulates
   # gradients before each optimizer step — same math, less memory.
-  per_device_train_batch_size: 4
-  gradient_accumulation_steps: 8
+  per_device_train_batch_size: 16  # increased from 4 — A100 has 42GB VRAM, only using 5.7GB
+  gradient_accumulation_steps: 2   # reduced from 8 — effective batch still 32 (16×2)
 
   # Save and evaluate every N steps
   # With 83K examples, batch=4, accum=8: ~2,600 optimizer steps per epoch

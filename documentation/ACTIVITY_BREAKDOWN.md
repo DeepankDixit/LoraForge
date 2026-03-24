@@ -11,7 +11,7 @@ Fine-tune Llama-3.1-8B-Instruct on cybersecurity instruction-response data to cr
 No public LoRA adapter exists for Llama-3.1-8B-Instruct on cybersecurity. We could use a full fine-tune (like `fdtn-ai/Foundation-Sec-8B`) but that would give us a model, not an adapter — it's a different object and skips the most educational part: understanding what an adapter actually is and how it's trained. Building the adapter ourselves creates a more compelling project narrative: "I identified the gap in public resources, curated the dataset, ran the training pipeline, and then optimized the result."
 
 ### The Technical Setup: QLoRA
-We use QLoRA (4-bit NF4 base model + LoRA adapters) to fit the 16GB model into ~7GB VRAM during training. This makes training feasible on a single A10G (24GB GPU) at reasonable cost (~$5-8 on Lambda Cloud for the full run).
+We use QLoRA (4-bit NF4 base model + LoRA adapters) to fit the 16GB model into ~7GB VRAM during training. This makes training feasible on a single A100 SXM4-40GB GPU on Lambda Cloud. The original estimate assumed an A10G (~$0.50/hr); Activity 0 was run on an A100 SXM4 ($1.48/hr) due to availability. Actual total cost was $33.30 across two instances (setup + full training run).
 
 ### What You Build
 - **`dataset_builder.py`**: Downloads Trendyol + CVE datasets, formats to ChatML, applies chat template, splits train/eval
@@ -28,15 +28,20 @@ We use QLoRA (4-bit NF4 base model + LoRA adapters) to fit the 16GB model into ~
 - `outputs/cybersec_analyst_lora/adapter_model.safetensors` — trained A and B matrices (~150MB)
 - `outputs/activity0_training_metrics.json` — loss curve, eval perplexity, GPU hours
 
-### Key Metrics to Capture
-| Metric | Expected Value |
-|---|---|
-| Training duration | 6-8 hours on A10G |
-| Estimated cost | $5-8 on Lambda Cloud |
-| Adapter size | ~150 MB |
-| Base model perplexity on cybersec QA | 15-25 |
-| Fine-tuned perplexity on cybersec QA | 8-15 |
-| Perplexity reduction | 20-40% |
+### Key Metrics — Actual Results (Activity 0 Complete)
+| Metric | Original Estimate | Actual |
+|---|---|---|
+| GPU | A10G 24GB @ ~$0.50/hr | A100 SXM4-40GB @ $1.48/hr |
+| Training duration | 6–8 hours | 17.87 hours (flash-attn unavailable; seq_len=1024, batch=8) |
+| Setup + debug instance | — | 1.85 hrs billed ($2.73) — dry runs and config fixes |
+| Training instance | — | 20.66 hrs billed ($30.57) — includes pre-training setup time |
+| Total Lambda cost | $5–8 | $33.30 (March 2026 invoice) |
+| Adapter size | ~150 MB | 160 MB (adapter_model.safetensors) |
+| Eval perplexity (untrained LoRA) | — | 5.22 (dry run baseline) |
+| Eval perplexity (fine-tuned) | 8–15 | 2.04 (final eval) |
+| Perplexity reduction | 20–40% | 61% (5.22 → 2.04) |
+| Final eval loss | — | 0.7126 |
+| Train/eval loss gap | — | 0.008 (no overfitting) |
 
 ### Concepts Learned
 - ChatML format and why the template matters for instruction-following models
@@ -66,7 +71,7 @@ activity0_sft/
 # Verify setup (5 steps, ~5 min, no output saved)
 python -m activity0_sft.training.qlora_trainer --dry-run
 
-# Full training run (6-8 hours on A10G)
+# Full training run (actual: 17.87 hrs on A100 SXM4 without flash-attn)
 python -m activity0_sft.training.qlora_trainer
 
 # Evaluate trained adapter
@@ -186,6 +191,14 @@ Step 5 Report:     <1 minute
 TOTAL:             ~60–120 minutes
 ```
 
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU | A10G 24GB @ $0.75/hr | A10G @ $0.75/hr (preferred) or A100 SXM4 @ $1.48/hr (fallback) |
+| Duration | 60–120 min | 60–120 min (inference only, no training) |
+| Instance cost | ~$1–2 | ~$0.75–1.50 (A10G) or ~$1.50–3.00 (A100 SXM4 fallback) |
+| Note | — | Activity 0 taught us: prefer A10G for inference activities; A100 is overkill |
+
 ---
 
 ## Activity 2: Quantization Pipeline
@@ -229,6 +242,14 @@ A team deploys Llama-3.1-8B fine-tuned for healthcare QA. In FP16 it needs 16GB 
 | FP8 | ~8GB | ~0.5% | 1.4x | 1.8x |
 | INT4 AWQ | ~4GB | ~2–4% | 1.8x | 2.5x |
 | INT8 SQ | ~8GB | ~1–2% | 1.3x | 1.5x |
+
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU | A10G 24GB @ $0.75/hr | A10G @ $0.75/hr (calibration + benchmarking; no heavy training) |
+| Duration | ~1–2 hours | ~1.5–2.5 hours (calibration pass + 3 quantization runs + benchmarks) |
+| Instance cost | ~$1–2 | ~$1.00–2.00 |
+| Note | — | Quantization calibration is fast (512 samples); benchmarking adds the bulk of time |
 
 ### Key ModelOpt Code Pattern
 ```python
@@ -326,6 +347,14 @@ An enterprise chatbot serves 10,000 employees. Every conversation starts with a 
 - Attention sink: why the first few tokens must be kept even in sliding window approaches
 - TTFT vs throughput as separate optimization targets
 
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU | A10G 24GB @ $0.75/hr | A10G @ $0.75/hr (inference + benchmark only) |
+| Duration | ~1–2 hours | ~1.5–2.5 hours (3 evaluators × multi-turn simulation sweeps) |
+| Instance cost | ~$1–2 | ~$1.00–2.00 |
+| Note | — | Pure inference workload; no training; A10G is sufficient. Prefix cache eval can be batched efficiently. |
+
 ### Key Files
 ```
 activity3_kv_cache/
@@ -382,6 +411,14 @@ Training requires ~70K conversation samples, ~1–2 days on 4x A100s. For a side
 - `acceptance_rate_curve.png` — acceptance rate vs temperature
 - `speedup_comparison.png` — speculative vs standard at batch 1/4/8/16
 - `speculative_report.md` — configuration recommendations
+
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU | A10G 24GB @ $0.75/hr | A100 SXM4-40GB @ $1.48/hr (EAGLE training is memory-intensive) |
+| Duration | ~2–4 hours | ~4–8 hours (fine-tuning existing EAGLE draft + benchmarking) |
+| Instance cost | ~$3–5 | ~$6–12 |
+| Note | — | Activity 0 showed training is slower than expected without flash-attn. Installing flash-attn for Activity 4 is strongly recommended to stay within budget. Full EAGLE train from scratch (~1–2 days on 4× A100) is not practical — use existing Llama-3.1-8B EAGLE draft as starting point. |
 
 ### Expected Results
 | Batch Size | Acceptance Rate | Speedup |
@@ -470,6 +507,14 @@ loraforge report --results-dir ./loraforge-results
 # Serve the optimized model
 loraforge serve --results-dir ./loraforge-results --port 8000
 ```
+
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU | A10G 24GB @ $0.75/hr | A10G @ $0.75/hr (light testing only; most work is local) |
+| Duration | ~1–2 hours | ~1–2 hours (CLI integration tests + dashboard smoke test) |
+| Instance cost | ~$1–2 | ~$0.75–1.50 |
+| Note | — | Activity 5 is mostly code/packaging work done locally. Lambda GPU only needed for final integration test run. |
 
 ### Key Files
 ```
@@ -584,3 +629,14 @@ The plan above uses LoRA CPT on a single GPU — which is fine-tuning, not pre-t
 **Skills demonstrated:** FSDP configuration, per-rank data loading, mixed-precision BF16 across ranks, gradient norm clipping in distributed context, checkpoint consolidation with `FSDP.save_state_dict`, and the `accelerate config` / `accelerate launch` workflow.
 
 **Decision:** Keep LoRA CPT as the primary implementation (it is practical and ships the project). Revisit the FSDP upgrade when all 5 core activities are complete. If done, this becomes the single strongest technical talking point in the entire project.
+
+### Revised Cost Estimate (Updated from Activity 0 Actuals)
+| | Original Estimate | Revised Estimate |
+|---|---|---|
+| GPU (LoRA CPT) | 1× A10G @ $0.75/hr | 1× A100 SXM4 @ $1.48/hr (Activity 0 showed A10G availability is unreliable) |
+| Duration (LoRA CPT) | 12–24 hours | 12–24 hours (CPT is similar to SFT; flash-attn strongly recommended this time) |
+| Instance cost (LoRA CPT) | ~$9–18 | ~$18–35 (with flash-attn: ~$9–18) |
+| GPU (FSDP, optional) | 4× A10G @ $3.00/hr | 4× A10G @ $3.00/hr |
+| Duration (FSDP, optional) | 2,000 steps ~4–6 hrs | 4–6 hours |
+| Instance cost (FSDP, optional) | ~$12–18 | ~$12–18 |
+| Note | — | Activity 0 lesson: **install flash-attn before training**. Without it, Activity 0 ran 17.87 hrs instead of projected 6–8 hrs, costing $33.30 vs the initial ~$5–8 estimate. Installing flash-attn is the single highest-ROI action before any training run. |

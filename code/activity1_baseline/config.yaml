@@ -86,7 +86,8 @@ benchmark:
     # Low temperature for reproducible outputs. Don't use 0.0 (greedy) —
     # it bypasses sampling and can produce slightly different code paths.
 
-  api_base_url: "http://localhost:8000/v1"
+  # api_base_url: "http://localhost:8000/v1"
+  api_base_url: "http://localhost:8000"
     # Where the benchmark client sends requests. Change if vLLM is on a remote server.
 
 # ── Evaluation Configuration ─────────────────────────────────────────────────

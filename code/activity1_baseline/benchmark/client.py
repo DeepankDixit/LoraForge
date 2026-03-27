@@ -364,7 +364,8 @@ async def run_benchmark(config: dict, args: argparse.Namespace) -> BenchmarkResu
         logger.info("QUICK MODE: Using reduced sweep")
 
     # Verify server is up
-    logger.info(f"Checking server health at {base_url}...")
+    # logger.info(f"Checking server health at {base_url}...")
+    logger.info(f"Checking server health at {base_url}/health...")
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(f"{base_url}/health")

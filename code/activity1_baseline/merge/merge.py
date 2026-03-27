@@ -29,6 +29,7 @@ Run:
 
 import argparse
 import logging
+from logging import config
 import os
 import time
 from pathlib import Path
@@ -185,11 +186,17 @@ def run_merge(config: dict, args: argparse.Namespace) -> str:
 
     Returns the path to the merged model directory.
     """
-    # base_model_id = args.base_model or config["base_model_id"]
-    base_model_id = getattr(args, "base_model", None) or config["base_model_id"]
-    # adapter_path = args.adapter or config["lora_adapter_path"]
-    adapter_path = getattr(args, "adapter", None) or config["lora_adapter_path"]
-    output_path = args.output or config["merged_model_path"]
+    args_dict = vars(args)
+    # # base_model_id = args.base_model or config["base_model_id"]
+    # base_model_id = getattr(args, "base_model", None) or config["base_model_id"]
+    # # adapter_path = args.adapter or config["lora_adapter_path"]
+    # adapter_path = getattr(args, "adapter", None) or config["lora_adapter_path"]
+    # # output_path = args.output or config["merged_model_path"]
+    # output_path = args_dict.get("output") or config["merged_model_path"]
+
+    base_model_id = args_dict.get("base_model") or config["base_model_id"]
+    adapter_path = args_dict.get("adapter") or config["lora_adapter_path"]
+    output_path = args_dict.get("output") or config["merged_model_path"]
     torch_dtype = config.get("merge", {}).get("torch_dtype", "float16")
 
     # ── Check if already merged ───────────────────────────────────────────

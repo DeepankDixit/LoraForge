@@ -200,7 +200,8 @@ def run_merge(config: dict, args: argparse.Namespace) -> str:
     torch_dtype = config.get("merge", {}).get("torch_dtype", "float16")
 
     # ── Check if already merged ───────────────────────────────────────────
-    if Path(output_path).exists() and not args.force:
+    # if Path(output_path).exists() and not args.force:
+    if Path(output_path).exists() and not args_dict.get("force", False):
         existing = list(Path(output_path).iterdir())
         if any(f.suffix == ".safetensors" for f in existing):
             logger.info(f"Merged model already exists at: {output_path}")

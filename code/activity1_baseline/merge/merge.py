@@ -187,7 +187,8 @@ def run_merge(config: dict, args: argparse.Namespace) -> str:
     """
     # base_model_id = args.base_model or config["base_model_id"]
     base_model_id = getattr(args, "base_model", None) or config["base_model_id"]
-    adapter_path = args.adapter or config["lora_adapter_path"]
+    # adapter_path = args.adapter or config["lora_adapter_path"]
+    adapter_path = getattr(args, "adapter", None) or config["lora_adapter_path"]
     output_path = args.output or config["merged_model_path"]
     torch_dtype = config.get("merge", {}).get("torch_dtype", "float16")
 

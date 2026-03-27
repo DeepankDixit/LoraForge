@@ -162,6 +162,7 @@ def build_vllm_command(config: dict, model_path: str, port: int) -> list[str]:
         "--served-model-name", "cybersec-analyst-fp16",
         # ↑ The name clients use in the "model" field of API requests.
         # Cleaner than a long file path.
+        "--enforce-eager",
     ]
 
     return cmd

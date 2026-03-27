@@ -29,6 +29,7 @@ Run:
 
 import argparse
 import logging
+from logging import config
 import os
 import signal
 import subprocess
@@ -245,8 +246,11 @@ def run_server(config: dict, args: argparse.Namespace) -> subprocess.Popen:
 
     Returns the subprocess handle (useful for programmatic teardown).
     """
-    model_path = args.model or config.get("merged_model_path", "./outputs/cybersec_analyst_merged")
-    port = args.port or config.get("server", {}).get("port", 8000)
+    args_dict = vars(args)
+    # model_path = args.model or config.get("merged_model_path", "./outputs/cybersec_analyst_merged")
+    model_path = args_dict.get("model") or config.get("merged_model_path", "./outputs/cybersec_analyst_merged")
+    # port = args.port or config.get("server", {}).get("port", 8000)
+    port = args_dict.get("port") or config.get("server", {}).get("port", 8000)
     base_url = f"http://localhost:{port}"
     timeout = config.get("server", {}).get("startup_timeout_seconds", 120)
 
@@ -267,7 +271,8 @@ def run_server(config: dict, args: argparse.Namespace) -> subprocess.Popen:
     # Launch vLLM — inherits stdout/stderr so logs are visible
     process = subprocess.Popen(cmd)
 
-    if args.no_wait:
+    # if args.no_wait:
+    if args_dict.get("no_wait"):
         logger.info("--no-wait specified. Server launched in background.")
         return process
 

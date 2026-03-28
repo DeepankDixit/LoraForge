@@ -92,9 +92,9 @@ benchmark:
 
 # ── Evaluation Configuration ─────────────────────────────────────────────────
 evaluation:
-  test_dataset: "trendyol/trendyol-llm-v2.0-dpo-mix-v3.0"
+  test_dataset: "HuggingFaceH4/ultrachat_200k"
     # Same dataset used for training in Activity 0. We use the held-out 5% test split.
-  test_split_name: "test"
+  test_split_name: "test_sft"
     # HuggingFace dataset split name.
   max_eval_samples: 500
     # Number of test examples to evaluate perplexity on. 500 is enough for

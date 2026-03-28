@@ -99,9 +99,9 @@ evaluation:
   max_eval_samples: 500
     # Number of test examples to evaluate perplexity on. 500 is enough for
     # statistical confidence without running for hours.
-  batch_size: 4
+  batch_size: 1
     # Batch size for perplexity computation (forward passes, no generation).
-  max_seq_length: 2048
+  max_seq_length: 1024
     # Truncate sequences longer than this for perplexity computation.
 
   qualitative_prompts:

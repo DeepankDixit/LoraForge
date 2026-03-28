@@ -105,6 +105,7 @@ def load_model_for_eval(model_path: str, device: str = "auto") -> tuple:
 
     model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer.pad_token = tokenizer.eos_token
 
     model.eval()   # Disable dropout for deterministic inference
     logger.info(f"Model loaded successfully")

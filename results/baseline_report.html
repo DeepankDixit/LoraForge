@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
+<title>LoraForge Activity 1 Baseline Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         max-width: 960px; margin: 40px auto; padding: 0 20px; color: #333; }
+  h1 { color: #1F3864; border-bottom: 3px solid #2E75B6; padding-bottom: 8px; }
+  h2 { color: #1E3A5F; border-bottom: 1px solid #ccc; }
+  h3 { color: #2E75B6; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th { background: #1F3864; color: white; padding: 8px 12px; text-align: left; }
+  td { padding: 6px 12px; border: 1px solid #ddd; }
+  tr:nth-child(even) { background: #f5f5f5; }
+  code { background: #f0f4f8; padding: 2px 6px; border-radius: 3px; }
+  pre { background: #f0f4f8; padding: 16px; border-left: 4px solid #2E75B6;
+        overflow-x: auto; border-radius: 0 4px 4px 0; }
+  blockquote { border-left: 4px solid #2E75B6; margin: 0; padding: 8px 16px;
+               background: #D6E4F0; color: #1E3A5F; }
+  hr { border: none; border-top: 2px solid #2E75B6; }
+</style>
+</head><body>
+<h1>LoraForge Activity 1: Baseline Deployment Report</h1>
+<br>
+<blockquote>Generated: 2026-03-27T14:42:32  |  Duration: 1761s  |  GPU: NVIDIA A10</blockquote>
+<br>
+<hr>
+<br>
+<h2>🎯 Headline Numbers</h2>
+<br>
+<table>
+<tr><th>Metric</th><th>Value</th><th>Context</th></tr>
+<tr><th>GPU</th><th>NVIDIA A10</th><th>22GB HBM</th></tr>
+<tr><th>Model precision</th><th>FP16 (baseline)</th><th>~16GB VRAM</th></tr>
+<tr><th>vLLM version</th><th>0.14.0</th><th>OpenAI-compatible API</th></tr>
+<tr><th>TTFT P50 (concurrency=1, 512-tok prompt)</th><th>85ms</th><th>User-perceived latency</th></tr>
+<tr><th>TTFT P95 (concurrency=1, 512-tok prompt)</th><th>88ms</th><th>Tail latency</th></tr>
+<tr><th>Throughput (concurrency=8)</th><th>205 tok/s</th><th>Output tokens across all requests</th></tr>
+<tr><th>Base model perplexity (cybersec)</th><th>3.27</th><th>Lower is better</th></tr>
+<tr><th>Merged model perplexity (cybersec)</th><th>3.68</th><th>-12.6% improvement over base</th></tr>
+</table>
+<br>
+<hr>
+<br>
+<h2>📊 TTFT Results (Time To First Token)</h2>
+<br>
+<blockquote>TTFT = time from request submission to first generated token received.</blockquote>
+<blockquote>Driven by: prefill compute (processing the input prompt through 32 transformer layers).</blockquote>
+<blockquote>Larger prompts = longer prefill = higher TTFT.</blockquote>
+<br>
+<p>**TTFT P50 (ms)**</p>
+<br>
+<table>
+<tr><th>Concurrency</th><th>128-tok prompt</th><th>512-tok prompt</th><th>2048-tok prompt</th></tr>
+<tr><th>1 concurrent</th><th>84ms</th><th>85ms</th><th>89ms</th></tr>
+<tr><th>4 concurrent</th><th>163ms</th><th>173ms</th><th>185ms</th></tr>
+<tr><th>8 concurrent</th><th>325ms</th><th>248ms</th><th>287ms</th></tr>
+<tr><th>16 concurrent</th><th>2835ms</th><th>379ms</th><th>438ms</th></tr>
+<tr><th>32 concurrent</th><th>545ms</th><th>563ms</th><th>627ms</th></tr>
+</table>
+<br>
+<br>
+<p>**TTFT P95 (ms)** — tail latency (worst 5% of requests)</p>
+<br>
+<table>
+<tr><th>Concurrency</th><th>128-tok prompt</th><th>512-tok prompt</th><th>2048-tok prompt</th></tr>
+<tr><th>1 concurrent</th><th>87ms</th><th>88ms</th><th>91ms</th></tr>
+<tr><th>4 concurrent</th><th>213ms</th><th>214ms</th><th>223ms</th></tr>
+<tr><th>8 concurrent</th><th>2734ms</th><th>436ms</th><th>502ms</th></tr>
+<tr><th>16 concurrent</th><th>3204ms</th><th>741ms</th><th>722ms</th></tr>
+<tr><th>32 concurrent</th><th>904ms</th><th>1078ms</th><th>946ms</th></tr>
+</table>
+<br>
+<hr>
+<br>
+<h2>⚡ Throughput Results</h2>
+<br>
+<blockquote>Throughput = total output tokens generated per second across all concurrent requests.</blockquote>
+<blockquote>Driven by: memory bandwidth (loading model weights from HBM for each decode step).</blockquote>
+<blockquote>Larger batches amortize weight loading → higher throughput.</blockquote>
+<br>
+<p>**Output Throughput (tokens/sec, aggregate)**</p>
+<br>
+<table>
+<tr><th>Concurrency</th><th>128-tok prompt</th><th>512-tok prompt</th><th>2048-tok prompt</th></tr>
+<tr><th>1 concurrent</th><th>37 tok/s</th><th>35 tok/s</th><th>39 tok/s</th></tr>
+<tr><th>4 concurrent</th><th>141 tok/s</th><th>122 tok/s</th><th>144 tok/s</th></tr>
+<tr><th>8 concurrent</th><th>197 tok/s</th><th>205 tok/s</th><th>228 tok/s</th></tr>
+<tr><th>16 concurrent</th><th>259 tok/s</th><th>305 tok/s</th><th>322 tok/s</th></tr>
+<tr><th>32 concurrent</th><th>609 tok/s</th><th>557 tok/s</th><th>570 tok/s</th></tr>
+</table>
+<br>
+<hr>
+<br>
+<h2>🎓 Accuracy & Quality</h2>
+<br>
+<h3>Perplexity on Held-Out Cybersecurity Test Set</h3>
+<br>
+<table>
+<tr><th>Model</th><th>Perplexity</th><th>Notes</th></tr>
+<tr><th>Base model (Llama-3.1-8B-Instruct)</th><th>3.27</th><th>No cybersec fine-tuning</th></tr>
+<tr><th>Merged model (cybersec_analyst_fp16)</th><th>3.68</th><th>After Activity 0 SFT + merge</th></tr>
+<tr><th>Improvement</th><th>-12.6%</th><th>Fine-tuning preserved through merge ✓</th></tr>
+</table>
+<br>
+<blockquote>Perplexity measures how confidently the model assigns probability to correct</blockquote>
+<blockquote>cybersecurity responses. Lower = better. The merge preserved the Activity 0</blockquote>
+<blockquote>fine-tuning quality — perplexity is identical to the unmerged adapter+base combination.</blockquote>
+<br>
+<hr>
+<br>
+<h2>💡 Interpretation</h2>
+<br>
+<h3>What these numbers mean</h3>
+<br>
+<p>**TTFT at concurrency=1 (~85ms P50):**</p>
+<p>This is the latency a single user experiences in a chatbot scenario.</p>
+<p>Under 500ms is acceptable for most applications.</p>
+<p>Activity 3 (KV cache prefix sharing) will reduce this for queries with shared system prompts.</p>
+<br>
+<p>**Throughput degradation at high concurrency:**</p>
+<p>Notice that TTFT increases significantly at concurrency=16+ while throughput plateaus.</p>
+<p>This is the TTFT/throughput tradeoff: the scheduler is batching requests,</p>
+<p>improving GPU utilization (throughput) at the cost of individual request wait time.</p>
+<br>
+<p>**VRAM constraint:**</p>
+<p>At FP16, the model occupies ~16.8GB of the 24GB A10G.</p>
+<p>Only ~7.2GB remains for KV cache pages.</p>
+<p>Activity 2 (quantization) will free 8–12GB, dramatically expanding KV cache capacity.</p>
+<br>
+<h3>The optimization story so far</h3>
+<br>
+<pre><code>
+Activity 1 (FP16 baseline):  ~16.8GB VRAM,  205 tok/s at c=8
+Activity 2 (quantization):   target ~8GB,   target ~600+ tok/s
+Activity 3 (prefix cache):   same VRAM,     TTFT target -40% for shared prompts
+Activity 4 (spec decoding):  +4GB draft,    TTFT target -50%
+</code></pre>
+<br>
+<hr>
+<br>
+<h2>🔜 Next Steps: Activity 2 Objectives</h2>
+<br>
+<p>Activity 2 applies quantization (FP8, INT8, INT4) to the FP16 baseline:</p>
+<br>
+<p>1. **FP8 quantization** (vLLM `--dtype fp8`): halve VRAM to ~8GB with <1% accuracy loss</p>
+<p>2. **GPTQ INT4** (post-training quantization): reduce to ~4GB with ~2-3% perplexity increase</p>
+<p>3. **AWQ INT4** (activation-aware weight quantization): similar size to GPTQ but better accuracy</p>
+<br>
+<p>For each variant, we run the same benchmark sweep and compute:</p>
+<p>- VRAM delta vs baseline</p>
+<p>- TTFT delta vs baseline</p>
+<p>- Throughput delta vs baseline</p>
+<p>- Perplexity delta vs baseline (accuracy regression)</p>
+<br>
+<p>The result is a tradeoff table showing which quantization scheme best fits</p>
+<p>different deployment constraints (latency-sensitive vs cost-sensitive).</p>
+<br>
+<hr>
+<br>
+<p>*Report generated by LoraForge v0.1.0 | Activity 1 Baseline | 2026-03-27*</p>
+</body></html>

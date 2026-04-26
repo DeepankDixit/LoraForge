@@ -1,0 +1,38 @@
+{
+  "quantization_results": {
+    "fp8": {
+      "format_name": "fp8",
+      "success": true,
+      "output_path": "outputs/quantized/fp8",
+      "vram_before_gb": 14.957542896270752,
+      "vram_after_gb": 14.989220142364502,
+      "vram_delta_gb": 0.03167724609375,
+      "calibration_duration_seconds": 113.63791935799964,
+      "perplexity": 6.070265293121338,
+      "perplexity_delta_pct": 64.9528612261233
+    },
+    "awq_int4": {
+      "format_name": "awq_int4",
+      "success": true,
+      "output_path": "outputs/quantized/awq_int4",
+      "vram_before_gb": 14.988792896270752,
+      "vram_after_gb": 15.194237232208252,
+      "vram_delta_gb": 0.2054443359375,
+      "calibration_duration_seconds": 3352.521203577001,
+      "perplexity": 6.222275733947754,
+      "perplexity_delta_pct": 69.08357972684112
+    },
+    "smoothquant_int8": {
+      "format_name": "smoothquant_int8",
+      "success": true,
+      "output_path": "outputs/quantized/smoothquant_int8",
+      "vram_before_gb": 14.988792896270752,
+      "vram_after_gb": 15.001121997833252,
+      "vram_delta_gb": 0.0123291015625,
+      "calibration_duration_seconds": 123.5451835620006,
+      "perplexity": 6.162217617034912,
+      "perplexity_delta_pct": 67.45156568029653
+    }
+  },
+  "benchmark_results": {}
+}

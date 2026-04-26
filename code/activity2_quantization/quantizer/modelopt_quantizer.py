@@ -206,6 +206,9 @@ class QuantizationProfiler:
         baseline_perplexity: Optional[float],
     ) -> QuantizationResult:
         """Core quantization logic."""
+        import gc
+
+        import modelopt.torch.opt as mto
         import modelopt.torch.quantization as mtq
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -224,114 +227,120 @@ class QuantizationProfiler:
         )
         model.eval()
 
-        vram_loaded_gb = torch.cuda.memory_allocated() / 1024**3
-        logger.info(
-            f"Model loaded: {vram_loaded_gb:.2f} GB VRAM "
-            f"({vram_loaded_gb - vram_before_gb:+.2f} GB delta)"
-        )
+        # try/finally guarantees VRAM is freed even if anything below raises.
+        # Without this, a failure mid-run leaves the model's 15 GB allocated,
+        # causing the next format to CPU-offload and run at 1/10th speed.
+        try:
+            vram_loaded_gb = torch.cuda.memory_allocated() / 1024**3
+            logger.info(
+                f"Model loaded: {vram_loaded_gb:.2f} GB VRAM "
+                f"({vram_loaded_gb - vram_before_gb:+.2f} GB delta)"
+            )
 
-        # ── Build quantization config ──────────────────────────────────────────
-        quant_config = self._build_modelopt_quant_config(format_name, fmt_config)
+            # ── Build quantization config ──────────────────────────────────────
+            quant_config = self._build_modelopt_quant_config(format_name, fmt_config)
 
-        # ── Build calibration forward loop ─────────────────────────────────────
-        # ModelOpt expects a callable that accepts the model and calls model(batch)
-        # for each calibration batch. We wrap calib_dataset.to_dataloader().
-        device = next(model.parameters()).device
+            # ── Build calibration forward loop ─────────────────────────────────
+            # ModelOpt expects a callable that accepts the model and calls model(batch)
+            # for each calibration batch. We wrap calib_dataset.to_dataloader().
+            device = next(model.parameters()).device
 
-        def calibration_forward_loop(model):
-            """Forward loop passed to mtq.quantize(). Runs calibration batches."""
-            logger.info(f"Running {len(calib_dataset)} calibration forward passes...")
-            for batch_idx, batch in enumerate(calib_dataset.to_dataloader(batch_size=1)):
-                batch = {k: v.to(device) for k, v in batch.items()}
-                with torch.no_grad():
-                    model(**batch)
-                if (batch_idx + 1) % 50 == 0:
-                    logger.info(f"  Calibration progress: {batch_idx + 1}/{len(calib_dataset)}")
+            def calibration_forward_loop(model):
+                """Forward loop passed to mtq.quantize(). Runs calibration batches."""
+                logger.info(f"Running {len(calib_dataset)} calibration forward passes...")
+                for batch_idx, batch in enumerate(calib_dataset.to_dataloader(batch_size=1)):
+                    batch = {k: v.to(device) for k, v in batch.items()}
+                    with torch.no_grad():
+                        model(**batch)
+                    if (batch_idx + 1) % 50 == 0:
+                        logger.info(f"  Calibration progress: {batch_idx + 1}/{len(calib_dataset)}")
 
-        # ── Apply quantization via ModelOpt ────────────────────────────────────
-        # This is the core call: ModelOpt inserts QuantDescriptor hooks, runs the
-        # forward loop to collect activation stats, then bakes scale factors in.
-        logger.info("Running mtq.quantize() — collecting activation statistics...")
-        calib_start = time.perf_counter()
+            # ── Apply quantization via ModelOpt ────────────────────────────────
+            # This is the core call: ModelOpt inserts QuantDescriptor hooks, runs the
+            # forward loop to collect activation stats, then bakes scale factors in.
+            logger.info("Running mtq.quantize() — collecting activation statistics...")
+            calib_start = time.perf_counter()
 
-        mtq.quantize(model, quant_config, forward_loop=calibration_forward_loop)
+            mtq.quantize(model, quant_config, forward_loop=calibration_forward_loop)
 
-        calib_duration = time.perf_counter() - calib_start
-        logger.info(f"mtq.quantize() complete in {calib_duration:.0f}s")
+            calib_duration = time.perf_counter() - calib_start
+            logger.info(f"mtq.quantize() complete in {calib_duration:.0f}s")
 
-        # ── Measure post-quantization VRAM ─────────────────────────────────────
-        vram_after_gb = torch.cuda.memory_allocated() / 1024**3
-        vram_delta_gb = vram_after_gb - vram_loaded_gb
-        logger.info(
-            f"Post-quantization VRAM: {vram_after_gb:.2f} GB "
-            f"(model delta: {vram_delta_gb:+.2f} GB)"
-        )
+            # ── Measure post-quantization VRAM ─────────────────────────────────
+            vram_after_gb = torch.cuda.memory_allocated() / 1024**3
+            vram_delta_gb = vram_after_gb - vram_loaded_gb
+            logger.info(
+                f"Post-quantization VRAM: {vram_after_gb:.2f} GB "
+                f"(model delta: {vram_delta_gb:+.2f} GB)"
+            )
 
-        # ── Save quantized model ───────────────────────────────────────────────
-        logger.info(f"Saving quantized model to {output_path}...")
-        save_start = time.perf_counter()
+            # ── Save quantized model ───────────────────────────────────────────
+            logger.info(f"Saving quantized model to {output_path}...")
+            save_start = time.perf_counter()
 
-        # In modelopt >= 0.17.0, save() moved from mtq to modelopt.torch.opt.
-        #   Old (broken): mtq.save(model, path)
-        #   New (correct): mto.save(model, path)
-        #
-        # mto.save() serializes the full model state dict plus the modelopt
-        # quantization metadata (QuantDescriptors, scale factors, quant_config).
-        # To reload: mto.restore(model_skeleton, path) where model_skeleton is
-        # a fresh AutoModelForCausalLM.from_pretrained(base_model_id).
-        #
-        # We also save model.config and the tokenizer alongside so the output
-        # directory is self-contained for vLLM / transformers loading.
-        import modelopt.torch.opt as mto
-        mto.save(model, str(output_path))
+            # mto.save() is torch.save() under the hood — it expects a FILE path
+            # (e.g. "dir/modelopt_state.pt"), NOT a directory path.
+            # Passing a bare directory ("outputs/quantized/fp8") raises:
+            #   RuntimeError: File outputs/quantized/fp8 cannot be opened.
+            modelopt_ckpt_path = output_path / "modelopt_state.pt"
+            mto.save(model, str(modelopt_ckpt_path))
 
-        # Save HuggingFace config (architecture spec) — needed for from_pretrained
-        # to build the correct model skeleton before mto.restore() overlays weights.
-        model.config.save_pretrained(str(output_path))
+            # Save HuggingFace config (architecture spec) — needed to build the
+            # correct model skeleton for mto.restore() on reload:
+            #   model = AutoModelForCausalLM.from_config(config)
+            #   mto.restore(model, "outputs/quantized/fp8/modelopt_state.pt")
+            model.config.save_pretrained(str(output_path))
 
-        # Save tokenizer alongside model (needed by vLLM to serve the model)
-        tokenizer = AutoTokenizer.from_pretrained(self.base_model_id)
-        tokenizer.save_pretrained(str(output_path))
+            # Save tokenizer alongside model (needed by vLLM to serve the model)
+            tokenizer = AutoTokenizer.from_pretrained(self.base_model_id)
+            tokenizer.save_pretrained(str(output_path))
 
-        save_duration = time.perf_counter() - save_start
-        logger.info(f"Saved in {save_duration:.0f}s")
+            save_duration = time.perf_counter() - save_start
+            logger.info(f"Saved in {save_duration:.0f}s")
 
-        # ── Quick perplexity eval ──────────────────────────────────────────────
-        perplexity = None
-        perplexity_delta_pct = None
+            # ── Quick perplexity eval ──────────────────────────────────────────
+            perplexity = None
+            perplexity_delta_pct = None
 
-        if run_quick_eval:
-            perplexity = self._quick_perplexity_eval(model, device)
-            if baseline_perplexity and perplexity:
-                perplexity_delta_pct = (
-                    (perplexity - baseline_perplexity) / baseline_perplexity * 100
-                )
-                logger.info(
-                    f"Perplexity: {perplexity:.4f} "
-                    f"(vs FP16 baseline {baseline_perplexity:.4f}, "
-                    f"Δ{perplexity_delta_pct:+.2f}%)"
-                )
+            if run_quick_eval:
+                perplexity = self._quick_perplexity_eval(model, device)
+                if baseline_perplexity and perplexity:
+                    perplexity_delta_pct = (
+                        (perplexity - baseline_perplexity) / baseline_perplexity * 100
+                    )
+                    logger.info(
+                        f"Perplexity: {perplexity:.4f} "
+                        f"(vs FP16 baseline {baseline_perplexity:.4f}, "
+                        f"Δ{perplexity_delta_pct:+.2f}%)"
+                    )
 
-        # ── Cleanup ────────────────────────────────────────────────────────────
-        del model
-        torch.cuda.empty_cache()
+            result = QuantizationResult(
+                format_name=format_name,
+                success=True,
+                output_path=str(output_path),
+                vram_before_gb=vram_loaded_gb,
+                vram_after_gb=vram_after_gb,
+                vram_delta_gb=vram_delta_gb,
+                calibration_duration_seconds=calib_duration,
+                perplexity=perplexity,
+                perplexity_delta_pct=perplexity_delta_pct,
+                metadata={
+                    "format_config": fmt_config,
+                    "save_duration_seconds": save_duration,
+                    "output_size_gb": self._dir_size_gb(output_path),
+                },
+            )
 
-        return QuantizationResult(
-            format_name=format_name,
-            success=True,
-            output_path=str(output_path),
-            vram_before_gb=vram_loaded_gb,
-            vram_after_gb=vram_after_gb,
-            vram_delta_gb=vram_delta_gb,
-            calibration_duration_seconds=calib_duration,
-            perplexity=perplexity,
-            perplexity_delta_pct=perplexity_delta_pct,
-            metadata={
-                "format_config": fmt_config,
-                "save_duration_seconds": save_duration,
-                "output_size_gb": self._dir_size_gb(output_path),
-            },
-        )
+        finally:
+            # Always free VRAM regardless of success or failure.
+            # del must happen inside this frame — if we let the exception
+            # propagate first, Python pins the frame in the traceback object,
+            # keeping model alive until the except block clears __traceback__.
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        return result
 
     def _build_modelopt_quant_config(self, format_name: str, fmt_config: dict) -> dict:
         """

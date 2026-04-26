@@ -1,0 +1,191 @@
+# ============================================================================
+# Activity 2: Quantization Pipeline Configuration
+# ============================================================================
+# Drives calibration.py, modelopt_quantizer.py, format_selector.py,
+# quant_benchmarker.py, and comparison_reporter.py.
+#
+# Run from repo root:
+#   python -m activity2_quantization.main --mode all
+#   python -m activity2_quantization.main --mode quantize --format fp8
+#   python -m activity2_quantization.main --mode benchmark --format awq_int4
+#   python -m activity2_quantization.main --mode report
+# ============================================================================
+
+# ── Model ────────────────────────────────────────────────────────────────────
+base_model_id: "meta-llama/Llama-3.1-8B-Instruct"
+  # The merged FP16 model from Activity 1 is what we quantize.
+  # base_model_id is used only for tokenizer loading and perplexity eval.
+
+merged_model_path: "./outputs/cybersec_analyst_merged"
+  # Source model for quantization. Must exist (output of Activity 1 merge step).
+  # This is the unoptimized FP16 baseline: ~16GB VRAM.
+
+quantized_output_dir: "./outputs/quantized"
+  # Root directory for quantized model checkpoints.
+  # Each format gets its own subdirectory:
+  #   outputs/quantized/fp8/
+  #   outputs/quantized/awq_int4/
+  #   outputs/quantized/smoothquant_int8/
+
+# ── Calibration Dataset ──────────────────────────────────────────────────────
+calibration:
+  dataset_id: "HuggingFaceH4/ultrachat_200k"
+    # Domain-representative dataset. Same source as Activity 0 training set.
+    # We use a held-out 512-sample calibration split (not from the train set).
+    # Why UltraChat: it covers technical dialogue — closer to cybersec Q&A
+    # than general text corpora like C4 or WikiText.
+
+  dataset_split: "train_sft"
+    # Pull from the training split but we will NOT use examples seen in Activity 0.
+    # We sample from the tail of the split to avoid data contamination.
+
+  num_calibration_samples: 512
+    # Why 512: CLT argument — 512 samples gives a stable estimate of per-channel
+    # activation maxima (the key statistic AWQ and SmoothQuant need).
+    # More samples give diminishing returns; fewer risk outlier-driven miscalibration.
+
+  max_seq_length: 512
+    # Truncate calibration sequences to 512 tokens.
+    # Longer sequences don't contribute significantly more to activation statistics
+    # but dramatically increase calibration time and memory.
+
+  seed: 42
+    # Fixed seed for reproducible calibration dataset sampling.
+
+  cache_path: "./outputs/calibration_dataset.pt"
+    # Pre-tokenized calibration dataset saved as a tensor file.
+    # If it exists, CalibrationDatasetBuilder loads it instead of re-processing.
+    # Why cache: tokenization + chat template application takes ~2 minutes;
+    # caching avoids repeating this for every quantization format.
+
+# ── Quantization Formats ─────────────────────────────────────────────────────
+quantization:
+  formats:
+    fp8:
+      enabled: true
+      dtype: "fp8"
+        # FP8 E4M3: 8-bit float with 4 exponent bits and 3 mantissa bits.
+        # Native on Ada Lovelace (4090), Hopper (H100), Blackwell (B200).
+        # Emulated on Ampere (A10G) — still faster than FP16 due to halved memory BW.
+        # Quantization algorithm: static per-tensor scaling, no calibration needed.
+        # VRAM target: ~8GB (vs ~16GB FP16). Accuracy loss: typically < 0.5% perplexity.
+      calibration_algorithm: "max"
+        # Use activation maxima to set scale factors.
+        # FP8 is robust enough that max-based scaling works well.
+      modelopt_config:
+        quant_cfg:
+          "*weight_quantizer": {"num_bits": {"e4m3": true}, "axis": null}
+          "*input_quantizer": {"num_bits": {"e4m3": true}, "axis": null}
+          "default": {"num_bits": {"e4m3": true}, "axis": null}
+
+    awq_int4:
+      enabled: true
+      dtype: "int4"
+        # AWQ: Activation-aware Weight Quantization (Lin et al. 2023).
+        # W4A16: weights in INT4, activations kept in FP16.
+        # Key insight: identify "salient" channels by their activation magnitudes,
+        # apply per-group scale factors that protect those channels.
+        # VRAM target: ~4–5GB. Accuracy loss: ~1–2% perplexity vs FP16.
+      group_size: 128
+        # Each group of 128 consecutive weight channels shares one FP16 scale factor.
+        # Smaller groups → better accuracy, larger dequantization overhead.
+        # 128 is the standard for LLM INT4 — used by GPTQ and AWQ.
+      calibration_algorithm: "awq"
+        # AWQ calibration: collect input activations, compute per-channel magnitudes,
+        # identify top-1% magnitude channels as "salient", apply scaling before quant.
+      modelopt_config:
+        quant_cfg:
+          "*weight_quantizer": {"num_bits": 4, "axis": 1, "block_sizes": {-1: 128}}
+          "*input_quantizer": {"num_bits": -1}  # -1 = no quantization (W4A16)
+          "default": {"num_bits": 4, "axis": 1}
+
+    smoothquant_int8:
+      enabled: true
+      dtype: "int8"
+        # SmoothQuant (Xiao et al. 2022): W8A8 — both weights and activations in INT8.
+        # Migrates quantization difficulty from activations to weights via
+        # per-channel smoothing factor s_j: X_smoothed = X / s_j, W_smoothed = W * s_j.
+        # After smoothing, both X and W have comparable magnitudes → INT8 roundoff is small.
+        # VRAM target: ~8GB. Accuracy loss: ~0.5–1% perplexity. Throughput: best on A10G.
+      alpha: 0.5
+        # Migration strength. alpha=0.5 splits difficulty 50/50 between X and W.
+        # Values in [0.4, 0.7] are typically stable. Higher alpha pushes more to weights.
+      calibration_algorithm: "smoothquant"
+      modelopt_config:
+        quant_cfg:
+          "*weight_quantizer": {"num_bits": 8, "axis": 0}
+          "*input_quantizer": {"num_bits": 8, "axis": -1}
+          "default": {"num_bits": 8, "axis": null}
+        smoothquant_alpha: 0.5
+
+  # Format to use when running in --mode quantize without --format flag
+  default_format: "fp8"
+
+# ── Benchmark Configuration ──────────────────────────────────────────────────
+benchmark:
+  baseline_results_path: "./results/baseline_results.json"
+    # Activity 1 FP16 baseline results. Every quantized format is compared against this.
+
+  concurrency_levels: [1, 4, 8, 16, 32]
+  prompt_lengths_tokens: [128, 512, 2048]
+  output_lengths_tokens: [128, 256]
+  num_requests_per_config: 20
+  warmup_requests: 5
+  request_timeout_seconds: 120
+  temperature: 0.1
+  api_base_url: "http://localhost:8000"
+
+  # vLLM server config for quantized models
+  server:
+    host: "0.0.0.0"
+    port: 8000
+    max_model_len: 4096
+    gpu_memory_utilization: 0.90
+    max_num_seqs: 64
+    tensor_parallel_size: 1
+    startup_timeout_seconds: 180
+      # Quantized models with kernel compilation need more startup time.
+
+# ── Format Selection Thresholds ───────────────────────────────────────────────
+format_selection:
+  # These thresholds define the decision boundaries for the FormatSelector.
+  # FormatSelector scores each quantized format on three axes and picks the best
+  # fit for the given deployment constraint (latency, throughput, or accuracy).
+
+  max_acceptable_perplexity_delta_pct: 5.0
+    # Reject formats with >5% perplexity increase vs FP16 baseline.
+    # 5% is the industry rule of thumb for "production-safe" quantization.
+
+  target_throughput_gain_pct: 50.0
+    # A format is "throughput-optimal" if it delivers ≥50% throughput improvement
+    # over FP16 at the same concurrency level.
+
+  target_ttft_reduction_pct: 20.0
+    # A format is "latency-optimal" if P50 TTFT drops by ≥20% vs FP16.
+
+  latency_weight: 0.33
+  throughput_weight: 0.34
+  accuracy_weight: 0.33
+    # Weights for the composite score used in --mode select.
+    # Sum must equal 1.0.
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+evaluation:
+  test_dataset: "HuggingFaceH4/ultrachat_200k"
+  test_split_name: "test_sft"
+  max_eval_samples: 500
+  batch_size: 1
+  max_seq_length: 1024
+
+# ── Reporting ─────────────────────────────────────────────────────────────────
+reporting:
+  output_dir: "./results"
+  quant_results_filename: "quant_results.json"
+    # Per-format benchmark results. Loaded by QuantizationReporter.
+  report_filename: "activity2_quantization_report.md"
+  include_html: true
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_dir: "./results/logs"

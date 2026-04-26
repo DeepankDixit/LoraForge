@@ -1,0 +1,60 @@
+# ============================================================================
+# LoraForge — Python Dependencies
+# ============================================================================
+# Install via: pip install -r requirements.txt
+# Or use the environment setup script: bash code/setup_lambda.sh
+#
+# Pinned at versions known to work together on Lambda Cloud (CUDA 12.4, A10G).
+# Versions marked "# unpinned" are pulled at latest compatible release.
+# ============================================================================
+
+# ── Core ML ─────────────────────────────────────────────────────────────────
+torch==2.4.0                        # PyTorch — base tensor library for all model ops
+torchvision==0.19.0                 # Required transitive dep of torch
+torchaudio==2.4.0                   # Required transitive dep of torch
+transformers==4.44.2                # HuggingFace Transformers — model loading, tokenizer
+accelerate==0.34.2                  # HuggingFace Accelerate — device_map="auto", mixed precision
+peft==0.13.0                        # HuggingFace PEFT — LoRA adapter loading/merging (Activity 0→1)
+datasets==3.0.1                     # HuggingFace Datasets — calibration set + eval set loading
+tokenizers==0.19.1                  # Fast tokenizer backend (transitive dep of transformers)
+safetensors==0.4.5                  # Safe model weight format (replaces .bin)
+
+# ── Inference Serving ────────────────────────────────────────────────────────
+vllm==0.6.1                         # PagedAttention inference engine — vLLM server + engine
+openai==1.47.0                      # OpenAI-compatible client — used to query vLLM API
+
+# ── Quantization ─────────────────────────────────────────────────────────────
+nvidia-modelopt[torch]==0.17.0      # NVIDIA ModelOpt — PTQ: AWQ, SmoothQuant, FP8 (main quant engine)
+bitsandbytes==0.43.3                # BitsAndBytes — INT8/INT4 load-time quantization (for comparison)
+auto-gptq==0.7.1                    # AutoGPTQ — GPTQ INT4 post-training quantization
+autoawq==0.2.6                      # AutoAWQ — standalone AWQ (alternative to ModelOpt for AWQ)
+
+# ── Numeric / Data ───────────────────────────────────────────────────────────
+numpy==1.26.4                       # Numeric arrays — used in calibration and benchmarking
+pandas==2.2.3                       # DataFrames — used in reporting and result comparison
+scipy==1.14.1                       # Statistical functions — percentile, distribution fitting
+
+# ── Config / Templating ──────────────────────────────────────────────────────
+omegaconf==2.3.0                    # YAML config with interpolation support
+hydra-core==1.3.2                   # Config management (optional, for advanced workflows)
+jinja2==3.1.4                       # HTML/Markdown report templating
+
+# ── HTTP / Async ─────────────────────────────────────────────────────────────
+httpx==0.27.2                       # Async HTTP client — benchmark streaming requests
+aiofiles==24.1.0                    # Async file I/O
+anyio==4.6.0                        # Async compatibility layer
+
+# ── Logging / Monitoring ─────────────────────────────────────────────────────
+rich==13.8.1                        # Terminal-rich output — progress bars, colored logs
+pynvml==11.5.0                      # NVIDIA Management Library — GPU utilization polling
+psutil==6.0.0                       # System resource monitoring (CPU, RAM)
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+pytest==8.3.3                       # Test runner
+pytest-asyncio==0.24.0              # Async test support
+pytest-cov==5.0.0                   # Test coverage
+
+# ── Dev Tooling ──────────────────────────────────────────────────────────────
+pyyaml==6.0.2                       # YAML parsing (config files)
+tqdm==4.66.5                        # Progress bars
+tabulate==0.9.0                     # ASCII table formatting for terminal output

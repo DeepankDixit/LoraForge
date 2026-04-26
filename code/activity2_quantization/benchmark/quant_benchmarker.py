@@ -198,6 +198,92 @@ class QuantizationBenchmarker:
 
     # ── Private Implementation ─────────────────────────────────────────────────
 
+    def _export_for_vllm(self, modelopt_ckpt_dir: str, format_name: str) -> str:
+        """
+        Export a modelopt checkpoint to HuggingFace safetensors format for vLLM.
+
+        WHY THIS IS NEEDED
+        -------------------
+        mto.save() writes a PyTorch state dict (modelopt_state.pt) that contains
+        QuantLinear layer weights + scale factors. vLLM cannot load this format —
+        it expects standard HuggingFace safetensors files where the weights are
+        already stored in the target dtype (fp8/int4/int8).
+
+        HOW IT WORKS
+        -------------
+        1. Load the model architecture from config.json (saved alongside modelopt_state.pt)
+        2. mto.restore() overlays the quantized QuantLinear weights onto the skeleton
+        3. export_hf_checkpoint() converts QuantLinear layers to real quantized dtypes
+           and writes them as safetensors + quantization_config.json
+        4. vLLM loads the export dir with the correct --quantization flag
+
+        The export is cached — if hf_export/ already contains safetensors, skip.
+        """
+        import gc
+        import torch
+        from pathlib import Path
+        from transformers import AutoModelForCausalLM
+        import modelopt.torch.opt as mto
+
+        ckpt_dir = Path(modelopt_ckpt_dir)
+        hf_export_dir = ckpt_dir / "hf_export"
+
+        # Return cached export if it exists
+        if hf_export_dir.exists() and any(hf_export_dir.glob("*.safetensors")):
+            logger.info(f"  HF export already exists at {hf_export_dir}, skipping export")
+            return str(hf_export_dir)
+
+        logger.info(f"  Exporting {format_name} checkpoint to HuggingFace format...")
+        logger.info(f"  Loading model skeleton from {ckpt_dir}...")
+
+        # Load model architecture from config.json that was saved alongside mto.save()
+        model = AutoModelForCausalLM.from_pretrained(
+            str(ckpt_dir),
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=False,
+        )
+
+        try:
+            # Restore modelopt quantization state onto the skeleton
+            modelopt_state = ckpt_dir / "modelopt_state.pt"
+            mto.restore(model, str(modelopt_state))
+            logger.info(f"  Restored modelopt quantization state from {modelopt_state.name}")
+
+            hf_export_dir.mkdir(parents=True, exist_ok=True)
+
+            # Export to HuggingFace safetensors format
+            try:
+                from modelopt.torch.export import export_hf_checkpoint
+                export_hf_checkpoint(model, str(hf_export_dir))
+                logger.info(f"  Exported to {hf_export_dir} via modelopt.torch.export")
+            except (ImportError, AttributeError) as e:
+                # Fallback: save via HuggingFace directly.
+                # Weights will be FP16 but quantization scale factors are baked in,
+                # so vLLM can still load the model (just without native quant speedup).
+                logger.warning(
+                    f"  export_hf_checkpoint not available ({e}), "
+                    f"falling back to model.save_pretrained()"
+                )
+                model.save_pretrained(str(hf_export_dir), safe_serialization=True)
+
+            # Copy tokenizer files into export dir so it's self-contained for vLLM
+            import shutil
+            for tok_file in ckpt_dir.glob("tokenizer*"):
+                shutil.copy2(tok_file, hf_export_dir / tok_file.name)
+            for special_file in ["special_tokens_map.json"]:
+                src = ckpt_dir / special_file
+                if src.exists():
+                    shutil.copy2(src, hf_export_dir / special_file)
+
+            return str(hf_export_dir)
+
+        finally:
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info(f"  Export complete — VRAM freed")
+
     def _benchmark_one_format(self, qr, args) -> Optional[FormatBenchmarkResults]:
         """Start server → benchmark → stop server → return results."""
         import datetime
@@ -207,9 +293,14 @@ class QuantizationBenchmarker:
             # Determine vLLM flags for this format
             vllm_dtype_flag = self._get_vllm_dtype_flag(qr.format_name)
 
-            # Start vLLM server
+            # Export modelopt checkpoint to HuggingFace format for vLLM.
+            # vLLM cannot load modelopt_state.pt directly — it needs safetensors.
+            logger.info(f"Preparing {qr.format_name} model for vLLM...")
+            vllm_model_path = self._export_for_vllm(qr.output_path, qr.format_name)
+
+            # Start vLLM server with the exported HF checkpoint
             server_process = self._start_vllm_server(
-                model_path=qr.output_path,
+                model_path=vllm_model_path,
                 dtype_flag=vllm_dtype_flag,
             )
 
@@ -249,11 +340,23 @@ class QuantizationBenchmarker:
                     server_process.kill()
 
     def _get_vllm_dtype_flag(self, format_name: str) -> str:
-        """Return the vLLM command-line flag for the quantization format."""
+        """
+        Return the correct vLLM --quantization flag for the format.
+
+        vLLM 0.6.1 valid --quantization values (from api_server.py --help):
+          fp8, awq, awq_marlin, gptq, gptq_marlin, bitsandbytes, compressed-tensors,
+          modelopt, marlin, ...
+        NOT valid: smoothquant, int8 (these are modelopt-internal names)
+
+        FP8:           --quantization fp8  (vLLM native FP8 loader)
+        AWQ INT4:      --quantization awq  (vLLM native AWQ loader, expects AWQ safetensors)
+        SmoothQuant:   --quantization compressed-tensors  (closest vLLM equivalent for W8A8;
+                       export_hf_checkpoint produces compressed-tensors compatible weights)
+        """
         flags = {
-            "fp8": "--dtype fp8",
+            "fp8": "--quantization fp8",
             "awq_int4": "--quantization awq",
-            "smoothquant_int8": "--quantization smoothquant",
+            "smoothquant_int8": "--quantization compressed-tensors",
         }
         return flags.get(format_name, "--dtype auto")
 

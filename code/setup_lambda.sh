@@ -94,13 +94,18 @@ log_success "PyTorch 2.4.0 + CUDA 12.4 installed"
 
 # ── Step 3: Install core requirements ────────────────────────────────────────
 log_info "Step 3/5: Installing requirements.txt (excluding torch, modelopt)..."
-# Why: Install the rest of the stack from requirements.txt. We exclude torch (already
-# installed above) and nvidia-modelopt (needs NVIDIA index, installed below).
-# The --extra-index-url for vLLM covers its CUDA-specific pre-built wheels.
-pip install -r "${REQUIREMENTS}" \
+# Why: Torch was already installed above from the CUDA wheel index. Including
+# torch lines in the requirements.txt install causes pip's resolver to re-evaluate
+# torch==2.4.0 against packages like vllm/autoawq/bitsandbytes and hit version
+# conflicts, even with --ignore-installed. Fix: grep out the torch lines before
+# passing to pip so they never enter the resolver. nvidia-modelopt is excluded
+# because it needs a separate --extra-index-url (NVIDIA registry, installed below).
+grep -vE '^torch==|^torchvision==|^torchaudio==|^nvidia-modelopt' "${REQUIREMENTS}" \
+    > /tmp/loraforge_reqs_notorch.txt
+pip install -r /tmp/loraforge_reqs_notorch.txt \
     --extra-index-url https://download.pytorch.org/whl/cu124 \
-    --ignore-installed torch torchvision torchaudio \
     --quiet
+rm /tmp/loraforge_reqs_notorch.txt
 log_success "Core requirements installed"
 
 # ── Step 4: Install nvidia-modelopt ──────────────────────────────────────────

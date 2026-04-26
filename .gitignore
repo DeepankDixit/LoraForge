@@ -73,3 +73,8 @@ htmlcov/
 .ruff_cache/
 # ─── Microsoft Office temp/lock files ────────
 ~$*
+
+.claude/
+.vscode/
+__pycache__/
+*.pyc

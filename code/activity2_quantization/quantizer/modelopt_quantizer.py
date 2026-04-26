@@ -170,6 +170,11 @@ class QuantizationProfiler:
                 f"OOM during {format_name} quantization. "
                 f"Try reducing calibration batch size or max_seq_length. Error: {e}"
             )
+            # Always purge VRAM after a failure so the next format starts clean.
+            # Without this, the failed model stays allocated and the next format
+            # sees a full VRAM budget minus the ghost allocation → CPU offloading.
+            import gc
+            gc.collect()
             torch.cuda.empty_cache()
             return QuantizationResult(
                 format_name=format_name, success=False, output_path=None,
@@ -179,6 +184,9 @@ class QuantizationProfiler:
             )
         except Exception as e:
             logger.error(f"Quantization failed for {format_name}: {e}", exc_info=True)
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
             return QuantizationResult(
                 format_name=format_name, success=False, output_path=None,
                 vram_before_gb=0, vram_after_gb=0, vram_delta_gb=0,
@@ -263,10 +271,25 @@ class QuantizationProfiler:
         logger.info(f"Saving quantized model to {output_path}...")
         save_start = time.perf_counter()
 
-        # Save model state dict with quantization metadata
-        mtq.save(model, str(output_path))
+        # In modelopt >= 0.17.0, save() moved from mtq to modelopt.torch.opt.
+        #   Old (broken): mtq.save(model, path)
+        #   New (correct): mto.save(model, path)
+        #
+        # mto.save() serializes the full model state dict plus the modelopt
+        # quantization metadata (QuantDescriptors, scale factors, quant_config).
+        # To reload: mto.restore(model_skeleton, path) where model_skeleton is
+        # a fresh AutoModelForCausalLM.from_pretrained(base_model_id).
+        #
+        # We also save model.config and the tokenizer alongside so the output
+        # directory is self-contained for vLLM / transformers loading.
+        import modelopt.torch.opt as mto
+        mto.save(model, str(output_path))
 
-        # Also save tokenizer alongside model (needed by vLLM to serve the model)
+        # Save HuggingFace config (architecture spec) — needed for from_pretrained
+        # to build the correct model skeleton before mto.restore() overlays weights.
+        model.config.save_pretrained(str(output_path))
+
+        # Save tokenizer alongside model (needed by vLLM to serve the model)
         tokenizer = AutoTokenizer.from_pretrained(self.base_model_id)
         tokenizer.save_pretrained(str(output_path))
 

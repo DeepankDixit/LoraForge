@@ -314,32 +314,64 @@ class QuantizationProfiler:
         """
         Build the quant_config dict that mtq.quantize() expects.
 
-        Format-specific configs are defined in config.yaml under
-        quantization.formats.{format}.modelopt_config.
-        This method augments them with any derived fields.
-        """
-        modelopt_cfg = fmt_config.get("modelopt_config", {})
-        quant_cfg = modelopt_cfg.get("quant_cfg", {})
+        WHY THIS CHANGED (modelopt 0.17.0 API break):
+        ------------------------------------------------
+        Pre-0.17.0, the config was a plain dict and callers could pass arbitrary
+        top-level keys: 'smoothquant_args', 'awq_args', algorithm='awq'.
 
-        if format_name == "smoothquant_int8":
-            # SmoothQuant requires an additional smoothing pass before quantization.
-            # alpha controls how much difficulty migrates to weights vs activations.
+        In 0.17.0, QuantizeConfig became a strict Pydantic model:
+          - 'smoothquant_args' / 'awq_args' at the top level → pydantic ValidationError
+            "Extra inputs are not permitted"
+          - algorithm='awq' → pydantic assertion failure (not a valid enum value;
+            the correct value is embedded inside the algorithm dict as 'awq_lite')
+
+        FIX: Use the built-in preset configs (mtq.FP8_DEFAULT_CFG,
+        mtq.INT8_SMOOTHQUANT_CFG, mtq.INT4_AWQ_CFG). These are module-level
+        dicts that are always correct for the installed modelopt version.
+        We deep-copy them so mutations (e.g. alpha override) don't leak
+        between calls.
+
+        Preset structures (modelopt 0.17.0):
+          FP8_DEFAULT_CFG:
+            {"quant_cfg": {"*weight_quantizer": ..., ...}, "algorithm": "max"}
+          INT8_SMOOTHQUANT_CFG:
+            {"quant_cfg": {"*weight_quantizer": ..., ...},
+             "algorithm": {"method": "smoothquant", "alpha": 0.5}}
+          INT4_AWQ_CFG:
+            {"quant_cfg": {"*weight_quantizer": ..., ...},
+             "algorithm": {"method": "awq_lite", "alpha_step": 0.1}}
+        """
+        import copy
+        import modelopt.torch.quantization as mtq
+
+        if format_name == "fp8":
+            # FP8 E4M3: static per-tensor max-based scaling.
+            # No calibration-driven algorithm needed — "max" is correct.
+            return copy.deepcopy(mtq.FP8_DEFAULT_CFG)
+
+        elif format_name == "smoothquant_int8":
+            # SmoothQuant W8A8: per-channel smoothing migrates quantization
+            # difficulty from activations to weights. alpha=0.5 splits 50/50.
+            # In modelopt >= 0.17.0, algorithm is a dict {"method": "smoothquant", "alpha": <float>}.
+            cfg = copy.deepcopy(mtq.INT8_SMOOTHQUANT_CFG)
             alpha = fmt_config.get("alpha", 0.5)
-            return {
-                "quant_cfg": quant_cfg,
-                "algorithm": "smoothquant",
-                "smoothquant_args": {"alpha": alpha},
-            }
+            if isinstance(cfg.get("algorithm"), dict):
+                cfg["algorithm"]["alpha"] = alpha
+            return cfg
+
         elif format_name == "awq_int4":
-            group_size = fmt_config.get("group_size", 128)
-            return {
-                "quant_cfg": quant_cfg,
-                "algorithm": "awq",
-                "awq_args": {"group_size": group_size},
-            }
+            # AWQ INT4 W4A16: activation-aware weight-only quantization.
+            # In modelopt >= 0.17.0, algorithm string 'awq' was replaced by
+            # the dict {"method": "awq_lite", ...} — do not pass "awq" as a string.
+            return copy.deepcopy(mtq.INT4_AWQ_CFG)
+
         else:
-            # FP8 and any other format: just pass quant_cfg directly
-            return {"quant_cfg": quant_cfg}
+            # Unknown format: fall back to raw yaml config with max-based scaling.
+            modelopt_cfg = fmt_config.get("modelopt_config", {})
+            return {
+                "quant_cfg": modelopt_cfg.get("quant_cfg", {}),
+                "algorithm": "max",
+            }
 
     def _quick_perplexity_eval(self, model, device, num_samples: int = 100) -> Optional[float]:
         """
